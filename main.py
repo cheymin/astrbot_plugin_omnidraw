@@ -173,6 +173,12 @@ class OmniDrawPlugin(Star):
             ["POST"],
             "为其他插件生成图片并返回结果",
         )
+        self.context.register_web_api(
+            f"/{PLUGIN_NAME}/fetch_modelscope_models",
+            self.fetch_modelscope_models_handler,
+            ["POST"],
+            "获取魔搭社区可用模型列表",
+        )
 
     def _resolve_data_dir(self) -> str:
         base_data_dir = str(get_astrbot_data_path())
@@ -649,12 +655,16 @@ class OmniDrawPlugin(Star):
     ]
 
     async def fetch_modelscope_models_handler(self):
-        """返回魔搭社区可用模型列表（从自制清单和在线 API 获取）。"""
-        payload = await request.get_json(silent=True) or {}
+        """返回魔搭社区可用模型列表（本地清单 + 在线 API 兜底）。"""
+        try:
+            payload = await request.get_json(silent=True) or {}
+        except Exception:
+            payload = {}
         api_key = str(payload.get("api_key", "")).strip()
 
-        # 如果有 API Key，尝试从 ModelScope 在线获取更多模型
-        online_models = []
+        models = list(self.MODELSCOPE_MODELS)
+
+        # 如果有 API Key，尝试在线获取更多模型补充
         if api_key:
             try:
                 url = "https://api-inference.modelscope.cn/v1/models"
@@ -662,30 +672,26 @@ class OmniDrawPlugin(Star):
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 }
-                timeout = aiohttp.ClientTimeout(total=10)
+                timeout = aiohttp.ClientTimeout(total=8)
                 async with self.session.get(url, headers=headers, timeout=timeout) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         raw = data if isinstance(data, list) else data.get("data", data.get("models", []))
                         if isinstance(raw, list):
+                            seen = {m["id"] for m in models}
                             for m in raw:
                                 mid = m.get("id", m.get("model_id", m.get("name", "")))
-                                if mid:
-                                    online_models.append({
+                                if mid and str(mid) not in seen:
+                                    seen.add(str(mid))
+                                    models.append({
                                         "id": str(mid),
                                         "type": "image",
                                         "description": m.get("description", m.get("task", "")),
                                     })
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(f"[OmniDraw] 魔搭在线模型获取失败（不影响本地清单）: {exc}")
 
-        # 合并：在线去重后优先，再补全本地清单
-        seen = {m["id"] for m in online_models}
-        for m in self.MODELSCOPE_MODELS:
-            if m["id"] not in seen:
-                online_models.append(m)
-
-        return jsonify({"success": True, "models": online_models})
+        return jsonify({"success": True, "models": models})
 
     def _config_for_page(self) -> Dict[str, Any]:
         self._page_image_tokens.clear()
