@@ -11,7 +11,7 @@ from .openai_chat_impl import OpenAIChatProvider
 
 def create_provider(config: ProviderConfig, session: aiohttp.ClientSession) -> BaseProvider:
     """根据配置实例化对应的 Provider"""
-    if config.api_type == APIType.OPENAI_IMAGE:
+    if config.api_type in (APIType.OPENAI_IMAGE, APIType.MODELSCOPE_IMAGE):
         return OpenAIProvider(config, session)
     # ===== 加入了 openai_chat 的识别分支 =====
     elif config.api_type == APIType.OPENAI_CHAT:

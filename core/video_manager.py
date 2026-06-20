@@ -12,7 +12,7 @@ from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Plain, Video
 
 from ..models import PluginConfig, ProviderConfig
-from ..providers.base import build_chat_completions_endpoint, build_video_generations_endpoint, guess_image_content_type, next_api_key
+from ..providers.base import build_chat_completions_endpoint, build_modelscope_task_endpoint, build_modelscope_video_endpoint, build_video_generations_endpoint, guess_image_content_type, next_api_key
 
 
 class VideoTaskError(Exception):
@@ -119,8 +119,12 @@ class VideoManager:
         return f"HTTP {response.status}: {text[:1000]}"
 
     async def _poll_task_result(self, provider: ProviderConfig, task_id: str, session: aiohttp.ClientSession) -> str:
-        endpoint = build_video_generations_endpoint(provider.base_url)
-        poll_url = f"{endpoint}/{task_id}"
+        is_modelscope = str(provider.api_type).strip() == "modelscope_video"
+        if is_modelscope:
+            poll_url = build_modelscope_task_endpoint(provider.base_url, task_id)
+        else:
+            endpoint = build_video_generations_endpoint(provider.base_url)
+            poll_url = f"{endpoint}/{task_id}"
         headers = {
             "Authorization": f"Bearer {self._get_api_key(provider)}",
             "Content-Type": "application/json",
@@ -139,8 +143,8 @@ class VideoManager:
                 status = str(data.get("status", data.get("task_status", ""))).upper()
                 logger.info(f"⏳ [视频轮询] Task ID: {task_id}, 状态: {status} (尝试 {attempt + 1}/{max_retries})")
 
-                if status in {"SUCCESS", "SUCCEEDED", "COMPLETED"}:
-                    video_url = self._extract_video_url(data)
+                if status in {"SUCCESS", "SUCCEED", "SUCCEEDED", "COMPLETED"}:
+                    video_url = self._extract_video_url(data, modelscope=is_modelscope)
                     if video_url:
                         return video_url
                     raise VideoTaskError(f"任务显示成功，但未找到视频 URL。API 返回数据: {data}")
@@ -157,7 +161,13 @@ class VideoManager:
 
         raise VideoTaskError(f"视频生成轮询超时，已达到设置的 {provider.timeout} 秒最大等待时间。")
 
-    def _extract_video_url(self, data: Dict[str, Any]) -> str:
+    def _extract_video_url(self, data: Dict[str, Any], modelscope: bool = False) -> str:
+        if modelscope:
+            output_videos = data.get("output_videos") or data.get("output", data.get("data", {}).get("videos", []))
+            if isinstance(output_videos, list) and output_videos:
+                return self._extract_url(str(output_videos[0]))
+            if isinstance(output_videos, str):
+                return self._extract_url(output_videos)
         video_url = data.get("video_url", data.get("url", data.get("output", "")))
         if video_url:
             return self._extract_url(str(video_url))
@@ -195,6 +205,27 @@ class VideoManager:
             b64_image = await self._encode_image_to_base64(image_url, session)
             if b64_image:
                 b64_images.append(b64_image)
+
+        if api_type.startswith("modelscope_video"):
+            endpoint = build_modelscope_video_endpoint(base_url)
+            headers["X-ModelScope-Async-Mode"] = "true"
+            payload = {"model": provider.model, "prompt": prompt}
+            if b64_images:
+                payload["images"] = b64_images
+            payload.update(api_kwargs)
+
+            logger.info(f"🎬 [魔搭视频模式] 提交视频任务至: {endpoint}")
+            async with session.post(endpoint, headers=headers, json=payload, timeout=30) as response:
+                if response.status >= 400:
+                    raise VideoTaskError(await self._read_error(response))
+                data = await response.json()
+
+            task_id = data.get("task_id") or data.get("id") or (data.get("data") or {}).get("task_id")
+            if not task_id:
+                raise VideoTaskError(f"魔搭视频提交成功但未找到任务 ID。API 原始返回: {data}")
+
+            logger.info(f"✅ [魔搭视频] 任务提交成功，获得 Task ID: {task_id}，即将进入轮询。")
+            return await self._poll_task_result(provider, str(task_id), session)
 
         if api_type.startswith("async_task"):
             payload = {"model": provider.model, "prompt": prompt}

@@ -175,9 +175,10 @@
               "openai_image",
               "openai_chat",
               "gemini_official",
-              "custom_endpoint"
+              "custom_endpoint",
+              "modelscope_image"
             ],
-            "hint": "openai_image 适合标准图片接口；openai_chat 适合会返回图片链接的 chat/completions 中转站；gemini_official 使用 Google Gemini 官方 generateContent；custom_endpoint 为自定义完整路径，只请求你填写的完整 URL，不会追加 /v1、/images/generations 或 /chat/completions。",
+            "hint": "openai_image 适合标准图片接口；openai_chat 适合会返回图片链接的 chat/completions 中转站；gemini_official 使用 Google Gemini 官方 generateContent；custom_endpoint 为自定义完整路径；modelscope_image 使用魔搭社区异步图片生成接口，会自动轮询任务结果。",
             "default": "openai_image"
           },
           "base_url": {
@@ -241,9 +242,10 @@
             "options": [
               "async_task",
               "openai_sync",
-              "openai_chat"
+              "openai_chat",
+              "modelscope_video"
             ],
-            "hint": "async_task 为提交后轮询；openai_sync 为同步阻塞；openai_chat 为 chat/completions 伪装视频生成。",
+            "hint": "async_task 为提交后轮询；openai_sync 为同步阻塞；openai_chat 为 chat/completions 伪装视频生成；modelscope_video 使用魔搭社区异步视频合成接口，会自动轮询任务结果。",
             "default": "async_task"
           },
           "base_url": {

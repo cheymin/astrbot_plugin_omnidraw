@@ -118,6 +118,23 @@ def build_video_generations_endpoint(base_url: str) -> str:
     return f"{base_url}/videos/generations"
 
 
+def build_modelscope_task_endpoint(base_url: str, task_id: str) -> str:
+    """构建魔搭任务轮询端点。"""
+    base_url = normalize_base_url(base_url)
+    # 确保指向 /v1/tasks/{task_id}
+    if base_url.endswith("/v1"):
+        return f"{base_url}/tasks/{task_id}"
+    return f"{base_url}/v1/tasks/{task_id}"
+
+
+def build_modelscope_video_endpoint(base_url: str) -> str:
+    """构建魔搭视频合成端点。"""
+    base_url = normalize_base_url(base_url)
+    if base_url.endswith("/v1"):
+        return f"{base_url}/services/aigc/video-generation/video-synthesis"
+    return f"{base_url}/v1/services/aigc/video-generation/video-synthesis"
+
+
 def next_api_key(provider_id: str, api_keys: List[str]) -> str:
     keys = [str(key).strip() for key in api_keys if str(key).strip()]
     if not provider_id or not keys:

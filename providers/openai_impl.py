@@ -1,3 +1,4 @@
+import asyncio
 import aiohttp
 import base64
 from typing import Any
@@ -8,6 +9,7 @@ from .base import (
     BaseProvider,
     build_image_edits_endpoint,
     build_image_generations_endpoint,
+    build_modelscope_task_endpoint,
     extract_error_message,
     extract_image_url_from_response,
     guess_image_content_type,
@@ -46,6 +48,86 @@ class OpenAIProvider(BaseProvider):
         mime_type = self._content_type(image_path_or_url)
         return f"data:{mime_type};base64," + base64.b64encode(image_bytes).decode("utf-8")
 
+    # ── 魔搭社区异步模式 ──────────────────────────────────────
+
+    @property
+    def _is_modelscope_mode(self) -> bool:
+        """判断当前节点是否为魔搭异步模式。"""
+        return self.config.api_type == "modelscope_image"
+
+    async def _handle_modelscope_response(self, response: aiohttp.ClientResponse) -> str:
+        """处理魔搭异步响应：解析 task_id → 轮询结果。"""
+        status = response.status
+        if status != 200:
+            error_text = await response.text()
+            logger.error("💥 [魔搭] API 返回错误摘要: " + summarize_response_text_for_log(error_text, max_string_length=500))
+            raise RuntimeError("HTTP " + str(status) + ": " + extract_error_message(error_text))
+
+        data = await response.json()
+        task_id = data.get("task_id") or (data.get("data") or {}).get("task_id")
+        if not task_id:
+            raise ValueError(
+                "魔搭异步 API 返回结构异常，未找到 task_id: "
+                + summarize_payload_json_for_log(data, max_string_length=500)
+            )
+
+        logger.info(f"⏳ [魔搭] 任务提交成功，Task ID: {task_id}，进入轮询...")
+        return await self._poll_modelscope_task(str(task_id))
+
+    async def _poll_modelscope_task(self, task_id: str) -> str:
+        """轮询魔搭任务状态，直到成功或超时。"""
+        base_url = self.config.base_url
+        poll_url = build_modelscope_task_endpoint(base_url, task_id)
+        headers = {"Authorization": "Bearer " + self.get_current_key()}
+
+        # 轮询间隔 5 秒，最大重试次数基于 timeout 配置
+        poll_interval = 5
+        max_retries = max(1, int(self.config.timeout) // poll_interval)
+
+        for attempt in range(max_retries):
+            await asyncio.sleep(poll_interval)
+            try:
+                timeout_obj = aiohttp.ClientTimeout(total=15)
+                async with self.session.get(poll_url, headers=headers, timeout=timeout_obj) as resp:
+                    if resp.status >= 400:
+                        logger.warning(f"⚠️ [魔搭] 轮询请求失败 (HTTP {resp.status})，重试 ({attempt + 1}/{max_retries})")
+                        continue
+                    data = await resp.json()
+            except Exception as exc:
+                logger.warning(f"⚠️ [魔搭] 轮询请求异常: {exc}，重试 ({attempt + 1}/{max_retries})")
+                continue
+
+            status = str(data.get("task_status", "")).upper()
+            logger.info(f"⏳ [魔搭] 任务 {task_id} 状态: {status} ({attempt + 1}/{max_retries})")
+
+            if status == "SUCCEED":
+                # 从 output_images 或 output 字段获取图片 URL
+                images = data.get("output_images") or data.get("output") or data.get("data", {}).get("images", [])
+                if isinstance(images, list) and images:
+                    return str(images[0])
+                if isinstance(images, str):
+                    return images
+                # 兜底：尝试从 extract_image_url_from_response 提取
+                url = extract_image_url_from_response(data, base_url)
+                if url:
+                    return url
+                raise ValueError(
+                    f"魔搭任务成功但未找到图片输出: "
+                    + summarize_payload_json_for_log(data, max_string_length=500)
+                )
+
+            if status in ("FAILED", "FAIL"):
+                error_msg = data.get("message", data.get("error", "未知失败原因"))
+                if isinstance(error_msg, dict):
+                    error_msg = error_msg.get("message", str(error_msg))
+                raise RuntimeError(f"魔搭任务失败: {error_msg}")
+
+            # 其他状态（PENDING / RUNNING 等）继续轮询
+
+        raise TimeoutError(
+            f"魔搭任务轮询超时 ({self.config.timeout}秒)，Task ID: {task_id}"
+        )
+
     async def generate_image(self, prompt: str, **kwargs: Any) -> str:
         current_key = self.get_current_key()
         if not current_key:
@@ -80,8 +162,12 @@ class OpenAIProvider(BaseProvider):
                 log_payload = {k: v for k, v in payload.items() if not str(k).startswith("image")}
                 logger.info(f"📤 [标准通道] 附带高级参数的请求体摘要: {summarize_payload_json_for_log(log_payload)}")
                 headers = {"Content-Type": "application/json", "Authorization": "Bearer " + current_key}
+                if self._is_modelscope_mode:
+                    headers["X-ModelScope-Async-Mode"] = "true"
                 timeout_obj = aiohttp.ClientTimeout(total=self.config.timeout)
                 async with self.session.post(url, json=payload, headers=headers, timeout=timeout_obj) as response:
+                    if self._is_modelscope_mode:
+                        return await self._handle_modelscope_response(response)
                     return await self._parse_response(response, base_url)
 
             data = aiohttp.FormData()
@@ -106,8 +192,12 @@ class OpenAIProvider(BaseProvider):
                 data.add_field(k, str(v))
 
             headers = {"Authorization": "Bearer " + current_key}
+            if self._is_modelscope_mode:
+                headers["X-ModelScope-Async-Mode"] = "true"
             timeout_obj = aiohttp.ClientTimeout(total=self.config.timeout)
             async with self.session.post(url, data=data, headers=headers, timeout=timeout_obj) as response:
+                if self._is_modelscope_mode:
+                    return await self._handle_modelscope_response(response)
                 return await self._parse_response(response, base_url)
 
         else:
@@ -127,9 +217,13 @@ class OpenAIProvider(BaseProvider):
             logger.info(f"📤 [标准通道] 附带高级参数的请求体摘要: {summarize_payload_json_for_log(payload)}")
 
             headers = {"Content-Type": "application/json", "Authorization": "Bearer " + current_key}
+            if self._is_modelscope_mode:
+                headers["X-ModelScope-Async-Mode"] = "true"
 
             timeout_obj = aiohttp.ClientTimeout(total=self.config.timeout)
             async with self.session.post(url, json=payload, headers=headers, timeout=timeout_obj) as response:
+                if self._is_modelscope_mode:
+                    return await self._handle_modelscope_response(response)
                 return await self._parse_response(response, base_url)
 
     async def _parse_response(self, response: aiohttp.ClientResponse, base_url: str) -> str:

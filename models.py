@@ -339,6 +339,8 @@ def _normalize_api_type(value: Any, is_video: bool) -> str:
         return "async_task" if is_video else "openai_image"
     lowered = raw.lower()
     if is_video:
+        if "modelscope" in lowered or "魔搭" in raw:
+            return "modelscope_video"
         if "chat" in lowered or "对话" in raw:
             return "openai_chat"
         if "sync" in lowered or "同步" in raw:
@@ -348,6 +350,8 @@ def _normalize_api_type(value: Any, is_video: bool) -> str:
         return APIType.GEMINI_OFFICIAL
     if lowered in {"custom_endpoint", "custom"} or "自定义" in raw:
         return APIType.CUSTOM_ENDPOINT
+    if lowered in {"modelscope", "modelscope_image"} or "魔搭" in raw or "modelscope" in lowered:
+        return APIType.MODELSCOPE_IMAGE
     if "chat" in lowered or "对话" in raw:
         return APIType.OPENAI_CHAT
     return APIType.OPENAI_IMAGE
