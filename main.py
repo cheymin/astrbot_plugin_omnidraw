@@ -101,6 +101,7 @@ CONFIG_KEYS = {
     "verbose_report",
     "show_generation_time",
     "show_request_model",
+    "modelscope_config",
 }
 
 
@@ -636,6 +637,55 @@ class OmniDrawPlugin(Star):
         self._refresh_from_native_config_if_changed()
         stats = await asyncio.to_thread(self._cache_stats_for_page)
         return jsonify({"success": True, "stats": stats})
+
+    # ── 魔搭社区快捷配置 ──────────────────────────────────────
+
+    MODELSCOPE_MODELS = [
+        {"id": "Qwen/Qwen-Image",             "type": "image", "description": "通义千问图片生成模型"},
+        {"id": "stabilityai/stable-diffusion-3-5-large", "type": "image", "description": "Stable Diffusion 3.5"},
+        {"id": "ByteDance/SDXL-Lightning",    "type": "image", "description": "字节跳动快速 SDXL"},
+        {"id": "alibaba-pai/PaiEasSDXL",      "type": "image", "description": "阿里云 PAI SDXL"},
+        {"id": "Qwen/Qwen2-VL-7B-Instruct",   "type": "image", "description": "通义千问视觉理解模型"},
+    ]
+
+    async def fetch_modelscope_models_handler(self):
+        """返回魔搭社区可用模型列表（从自制清单和在线 API 获取）。"""
+        payload = await request.get_json(silent=True) or {}
+        api_key = str(payload.get("api_key", "")).strip()
+
+        # 如果有 API Key，尝试从 ModelScope 在线获取更多模型
+        online_models = []
+        if api_key:
+            try:
+                url = "https://api-inference.modelscope.cn/v1/models"
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                }
+                timeout = aiohttp.ClientTimeout(total=10)
+                async with self.session.get(url, headers=headers, timeout=timeout) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        raw = data if isinstance(data, list) else data.get("data", data.get("models", []))
+                        if isinstance(raw, list):
+                            for m in raw:
+                                mid = m.get("id", m.get("model_id", m.get("name", "")))
+                                if mid:
+                                    online_models.append({
+                                        "id": str(mid),
+                                        "type": "image",
+                                        "description": m.get("description", m.get("task", "")),
+                                    })
+            except Exception:
+                pass
+
+        # 合并：在线去重后优先，再补全本地清单
+        seen = {m["id"] for m in online_models}
+        for m in self.MODELSCOPE_MODELS:
+            if m["id"] not in seen:
+                online_models.append(m)
+
+        return jsonify({"success": True, "models": online_models})
 
     def _config_for_page(self) -> Dict[str, Any]:
         self._page_image_tokens.clear()

@@ -445,5 +445,25 @@
     "type": "bool",
     "hint": "开启后，/画、宏指令、/自拍 和 /视频 指令成功返回时会附带实际成功节点使用的模型名。",
     "default": false
+  },
+  "modelscope_config": {
+    "description": "魔搭社区快捷配置",
+    "type": "object",
+    "hint": "填写魔搭 API Key，一键获取可用模型并自动创建算力节点，无需手动配置 provider。",
+    "items": {
+      "api_key": {
+        "description": "魔搭社区 API Key",
+        "type": "text",
+        "hint": "从 https://modelscope.cn 控制台获取。填写后点击 WebUI 中的「获取模型」即可自动拉取可用模型列表。",
+        "default": ""
+      },
+      "selected_models": {
+        "description": "已选择的模型",
+        "type": "list",
+        "hint": "由 WebUI 魔搭配置页自动管理，请勿手动修改。",
+        "default": [],
+        "invisible": true
+      }
+    }
   }
 }

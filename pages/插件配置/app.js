@@ -88,6 +88,16 @@ const bridge = window.AstrBotPluginPage || {
     )),
     apiPost: async (name, payload) => {
         console.info(`[OmniDraw local preview] ${name}`, payload);
+        if (name === "fetch_modelscope_models") {
+            const prevModels = [
+                { id: "Qwen/Qwen-Image", type: "image", description: "通义千问图片生成模型" },
+                { id: "stabilityai/stable-diffusion-3-5-large", type: "image", description: "Stable Diffusion 3.5" },
+                { id: "ByteDance/SDXL-Lightning", type: "image", description: "字节跳动快速 SDXL" },
+                { id: "alibaba-pai/PaiEasSDXL", type: "image", description: "阿里云 PAI SDXL" },
+                { id: "Qwen/Qwen2-VL-7B-Instruct", type: "image", description: "通义千问视觉理解模型" },
+            ];
+            return { success: true, models: prevModels };
+        }
         return { success: true, stats: mockCacheStats, cleanup: { deleted_count: 0, human_deleted_size: "0 B" } };
     }
 };
@@ -114,7 +124,12 @@ let state = {
     video_providers: [],
     verbose_report: false,
     show_generation_time: false,
-    show_request_model: false
+    show_request_model: false,
+    modelscope_config: {
+        api_key: "",
+        selected_models: []
+    },
+    modelscope_available_models: []
 };
 
 let initialized = false;
@@ -833,6 +848,56 @@ function renderPresets() {
     updateMetrics();
 }
 
+// ── 魔搭社区快捷配置 ──────────────────────────────────────
+
+function renderModelscopeModels() {
+    const container = byId("modelscope-model-list");
+    const models = state.modelscope_available_models;
+    const selected = new Set(state.modelscope_config.selected_models || []);
+
+    if (!models.length) {
+        container.innerHTML = '<p class="hint-text">点击「获取模型」查看可用模型。</p>';
+        return;
+    }
+
+    container.innerHTML = models.map((m) => {
+        const sel = selected.has(m.id) ? " selected" : "";
+        return `<div class="model-chip${sel}" data-modelscope-model="${escapeHtml(m.id)}">
+            <span>${escapeHtml(m.id)}</span>
+            <small>${escapeHtml(m.description || "")}</small>
+        </div>`;
+    }).join("");
+}
+
+function syncModelscopeProviders(payload) {
+    const msConfig = payload.modelscope_config || {};
+    const selected = msConfig.selected_models || [];
+    const apiKey = String(msConfig.api_key || "").trim();
+
+    // 移除旧的自动生成节点
+    payload.providers = (payload.providers || []).filter((p) => !p.id.startsWith("modelscope_"));
+    payload.video_providers = (payload.video_providers || []).filter((p) => !p.id.startsWith("modelscope_"));
+
+    if (!apiKey || !selected.length) return;
+
+    selected.forEach((modelId) => {
+        const safeId = "modelscope_" + modelId.replace(/[/:.]/g, "_").toLowerCase();
+        const existing = payload.providers.find((p) => p.id === safeId);
+        if (!existing) {
+            payload.providers.push({
+                id: safeId,
+                api_type: "modelscope_image",
+                base_url: "https://api-inference.modelscope.cn/v1",
+                model: modelId,
+                available_models: [modelId],
+                timeout: 120,
+                default_size: "",
+                api_keys: apiKey
+            });
+        }
+    });
+}
+
 function renderProviders() {
     const html = state.providers.map((p, i) => renderProviderCard(p, i, false)).join("");
     byId("providers-container").innerHTML = html || '<div class="empty-state">尚未配置图像节点</div>';
@@ -1002,7 +1067,8 @@ function buildPayload() {
         video_providers: state.video_providers,
         verbose_report: state.verbose_report,
         show_generation_time: state.show_generation_time,
-        show_request_model: state.show_request_model
+        show_request_model: state.show_request_model,
+        modelscope_config: state.modelscope_config
     };
 }
 
@@ -1385,6 +1451,62 @@ function setupEventDelegation() {
         });
         fileInput.value = "";
     });
+
+    // 魔搭社区：获取模型
+    byId("btn-fetch-models").addEventListener("click", async () => {
+        const apiKey = byId("modelscope-api-key").value.trim();
+        const statusEl = byId("modelscope-fetch-status");
+        const btn = byId("btn-fetch-models");
+
+        if (!apiKey) {
+            statusEl.textContent = "请先填写 API Key";
+            statusEl.className = "status-text error";
+            return;
+        }
+
+        state.modelscope_config.api_key = apiKey;
+        setDirty();
+
+        btn.disabled = true;
+        statusEl.textContent = "获取中...";
+        statusEl.className = "status-text loading";
+
+        try {
+            const res = await bridge.apiPost("fetch_modelscope_models", { api_key: apiKey });
+            if (res?.success && Array.isArray(res.models)) {
+                state.modelscope_available_models = res.models;
+                renderModelscopeModels();
+                statusEl.textContent = `获取到 ${res.models.length} 个模型`;
+                statusEl.className = "status-text success";
+            } else {
+                statusEl.textContent = "获取失败，请检查 API Key";
+                statusEl.className = "status-text error";
+            }
+        } catch {
+            statusEl.textContent = "网络错误";
+            statusEl.className = "status-text error";
+        } finally {
+            btn.disabled = false;
+        }
+    });
+
+    // 魔搭社区：模型选择/取消
+    byId("modelscope-model-list").addEventListener("click", (e) => {
+        const chip = e.target.closest("[data-modelscope-model]");
+        if (!chip) return;
+        const modelId = chip.getAttribute("data-modelscope-model");
+        const selected = state.modelscope_config.selected_models || [];
+
+        const idx = selected.indexOf(modelId);
+        if (idx >= 0) {
+            selected.splice(idx, 1);
+        } else {
+            selected.push(modelId);
+        }
+        state.modelscope_config.selected_models = selected;
+        renderModelscopeModels();
+        setDirty();
+    });
 }
 
 async function saveConfig(btn) {
@@ -1398,6 +1520,7 @@ async function saveConfig(btn) {
     btn.textContent = "保存中...";
     try {
         const payload = buildPayload();
+        syncModelscopeProviders(payload);
         const res = await bridge.apiPost("save_config", payload);
         if (res?.success) {
             savedSnapshot = JSON.stringify(payload);
@@ -1482,6 +1605,15 @@ async function init() {
     state.verbose_report = Boolean(rawConfig.verbose_report);
     state.show_generation_time = Boolean(rawConfig.show_generation_time);
     state.show_request_model = Boolean(rawConfig.show_request_model);
+
+    // 魔搭社区快捷配置
+    const msConfig = rawConfig.modelscope_config || {};
+    state.modelscope_config = {
+        api_key: String(msConfig.api_key || ""),
+        selected_models: Array.isArray(msConfig.selected_models) ? msConfig.selected_models : []
+    };
+    state.modelscope_available_models = [];
+    byId("modelscope-api-key").value = state.modelscope_config.api_key;
 
     bindBasicFields();
     renderSelectors();

@@ -48,6 +48,9 @@
                 <button class="nav-item" data-target="tab-nodes" type="button">
                     <span class="nav-icon">▣</span><span>节点</span>
                 </button>
+                <button class="nav-item" data-target="tab-modelscope" type="button">
+                    <span class="nav-icon">⚡</span><span>魔搭</span>
+                </button>
             </nav>
 
             <div class="sidebar-metrics">
@@ -465,6 +468,37 @@
                         <button data-action="add-video-provider" class="btn-secondary" type="button">添加视频节点</button>
                     </div>
                     <div class="list-container" id="video-providers-container"></div>
+                </article>
+            </section>
+
+            <!-- ========= 魔搭社区快捷配置 ========= -->
+            <section id="tab-modelscope" class="tab-panel">
+                <article class="card wide-card">
+                    <div class="card-header">
+                        <div>
+                            <h3>⚡ 魔搭社区快捷配置</h3>
+                            <p>填写 API Key，一键获取模型列表并自动创建算力节点。</p>
+                        </div>
+                    </div>
+                    <div class="modelscope-section">
+                        <div class="setting-row">
+                            <label class="setting-label">API Key</label>
+                            <div class="setting-input-group">
+                                <input type="password" id="modelscope-api-key" class="setting-input"
+                                       placeholder="sk-..." autocomplete="off" spellcheck="false">
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <label class="setting-label"></label>
+                            <div class="setting-input-group">
+                                <button id="btn-fetch-models" class="btn-primary" type="button">获取模型</button>
+                                <span id="modelscope-fetch-status" class="status-text"></span>
+                            </div>
+                        </div>
+                        <div id="modelscope-model-list" class="modelscope-model-grid">
+                            <p class="hint-text">点击「获取模型」查看可用模型。</p>
+                        </div>
+                    </div>
                 </article>
             </section>
         </main>
