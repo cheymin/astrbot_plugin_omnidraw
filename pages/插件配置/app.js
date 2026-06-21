@@ -880,20 +880,33 @@ function syncModelscopeProviders(payload) {
 
     if (!apiKey || !selected.length) return;
 
+    const newIds = [];
     selected.forEach((modelId) => {
         const safeId = "modelscope_" + modelId.replace(/[/:.]/g, "_").toLowerCase();
-        const existing = payload.providers.find((p) => p.id === safeId);
-        if (!existing) {
-            payload.providers.push({
-                id: safeId,
-                api_type: "modelscope_image",
-                base_url: "https://api-inference.modelscope.cn/v1",
-                model: modelId,
-                available_models: [modelId],
-                timeout: 120,
-                default_size: "",
-                api_keys: apiKey
-            });
+        newIds.push(safeId);
+        payload.providers.push({
+            id: safeId,
+            api_type: "modelscope_image",
+            base_url: "https://api-inference.modelscope.cn/v1",
+            model: modelId,
+            available_models: [modelId],
+            timeout: 120,
+            default_size: "",
+            api_keys: apiKey
+        });
+    });
+
+    // 自动更新路由：如果原有链路指向不存在的节点，则指向第一个魔搭节点
+    const firstId = newIds[0];
+    const router = payload.router_config || {};
+    const existingIds = new Set((payload.providers || []).map((p) => p.id));
+
+    ["chain_text2img", "chain_selfie"].forEach((chain) => {
+        const current = router[chain] || "";
+        const nodes = current.split("||").map((s) => s.trim()).filter(Boolean);
+        const valid = nodes.filter((n) => existingIds.has(n));
+        if (!valid.length && firstId) {
+            router[chain] = firstId;
         }
     });
 }
