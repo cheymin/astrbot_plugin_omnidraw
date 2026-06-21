@@ -117,9 +117,22 @@ class OpenAIProvider(BaseProvider):
                 )
 
             if status in ("FAILED", "FAIL"):
-                error_msg = data.get("message", data.get("error", "未知失败原因"))
+                # 尝试多种字段提取错误信息
+                error_msg = (
+                    data.get("message")
+                    or data.get("error")
+                    or data.get("error_message")
+                    or data.get("msg")
+                    or (data.get("data") or {}).get("message")
+                    or (data.get("data") or {}).get("error")
+                    or "未知失败原因"
+                )
                 if isinstance(error_msg, dict):
-                    error_msg = error_msg.get("message", str(error_msg))
+                    error_msg = error_msg.get("message", error_msg.get("error", str(error_msg)))
+                logger.error(
+                    f"💥 [魔搭] 任务 {task_id} 失败，完整响应: "
+                    + summarize_payload_json_for_log(data, max_string_length=800)
+                )
                 raise RuntimeError(f"魔搭任务失败: {error_msg}")
 
             # 其他状态（PENDING / RUNNING 等）继续轮询
