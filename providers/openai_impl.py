@@ -64,7 +64,8 @@ class OpenAIProvider(BaseProvider):
             raise RuntimeError("HTTP " + str(status) + ": " + extract_error_message(error_text))
 
         data = await response.json()
-        task_id = data.get("task_id") or (data.get("data") or {}).get("task_id")
+        logger.info(f"📦 [魔搭] 提交任务响应: " + summarize_payload_json_for_log(data, max_string_length=500))
+        task_id = data.get("task_id") or (data.get("data") or {}).get("task_id") or data.get("id")
         if not task_id:
             raise ValueError(
                 "魔搭异步 API 返回结构异常，未找到 task_id: "
@@ -78,7 +79,10 @@ class OpenAIProvider(BaseProvider):
         """轮询魔搭任务状态，直到成功或超时。"""
         base_url = self.config.base_url
         poll_url = build_modelscope_task_endpoint(base_url, task_id)
-        headers = {"Authorization": "Bearer " + self.get_current_key()}
+        headers = {
+            "Authorization": "Bearer " + self.get_current_key(),
+            "X-ModelScope-Task-Type": "image_generation",
+        }
 
         # 轮询间隔 5 秒，最大重试次数基于 timeout 配置
         poll_interval = 5
@@ -117,16 +121,20 @@ class OpenAIProvider(BaseProvider):
                 )
 
             if status in ("FAILED", "FAIL"):
-                # 尝试多种字段提取错误信息
-                error_msg = (
-                    data.get("message")
-                    or data.get("error")
-                    or data.get("error_message")
-                    or data.get("msg")
-                    or (data.get("data") or {}).get("message")
-                    or (data.get("data") or {}).get("error")
-                    or "未知失败原因"
-                )
+                # 尝试多种字段提取错误信息（魔搭错误可能在 errors.message 中）
+                errors_obj = data.get("errors")
+                if isinstance(errors_obj, dict):
+                    error_msg = errors_obj.get("message", errors_obj.get("msg", ""))
+                if not error_msg:
+                    error_msg = (
+                        data.get("message")
+                        or data.get("error")
+                        or data.get("error_message")
+                        or data.get("msg")
+                        or (data.get("data") or {}).get("message")
+                        or (data.get("data") or {}).get("error")
+                        or "未知失败原因"
+                    )
                 if isinstance(error_msg, dict):
                     error_msg = error_msg.get("message", error_msg.get("error", str(error_msg)))
                 logger.error(
@@ -172,6 +180,9 @@ class OpenAIProvider(BaseProvider):
                         raise RuntimeError(f"读取第 {idx} 张参考图数据失败: {e}")
                     payload["image" if idx == 1 else f"image{idx}"] = image_value
                 payload.update(api_kwargs)
+                # 魔搭不认 "n" 参数，移除
+                if self._is_modelscope_mode:
+                    payload.pop("n", None)
                 log_payload = {k: v for k, v in payload.items() if not str(k).startswith("image")}
                 logger.info(f"📤 [标准通道] 附带高级参数的请求体摘要: {summarize_payload_json_for_log(log_payload)}")
                 headers = {"Content-Type": "application/json", "Authorization": "Bearer " + current_key}
@@ -198,7 +209,8 @@ class OpenAIProvider(BaseProvider):
 
             data.add_field('prompt', prompt)
             data.add_field('model', self.config.model)
-            data.add_field('n', '1')
+            if not self._is_modelscope_mode:
+                data.add_field('n', '1')
 
             # 高级参数注入表单
             for k, v in api_kwargs.items():
@@ -220,8 +232,9 @@ class OpenAIProvider(BaseProvider):
             payload = {
                 "model": self.config.model,
                 "prompt": prompt,
-                "n": 1
             }
+            if not self._is_modelscope_mode:
+                payload["n"] = 1
 
             # 🚀 完美兼容 gptimage2 / gemini-3.1-image 规范
             # 暴力将所有高级参数塞入 JSON 的最外层，中转 API 会直接识别并调用底层
